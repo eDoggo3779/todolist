@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ToDo — minimal (hst.sh‑style)</title>
+  <meta name="description" content="Ultra‑minimal one‑pane editor with checkboxes + local save" />
+  <style>
+    :root {
+      --bg: #0b1220;           /* deep navy/slate */
+      --fg: #e5e7eb;           /* near‑white */
+      --fg-dim: #cbd5e1;       /* slate‑300 */
+      --muted: #8aa0b6;        /* desaturated slate */
+      --accent: #94a3b8;       /* slate‑400 */
+      --border: #1f2937;       /* slate‑800 */
+      --ok: #86efac;           /* green‑300 (for tiny flash) */
+    }
+
+    html, body {
+      margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+      font: 16px/1.5 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    }
+
+    /* Container fills the viewport like hastebin's single pane */
+    .wrap { position: fixed; inset: 0; display: grid; grid-template-rows: auto 1fr; }
+
+    /* Top bar is super minimal */
+    .topbar { display: flex; align-items: center; justify-content: flex-end; gap: 8px;
+      padding: 10px 12px; border-bottom: 1px solid var(--border); background: rgba(255,255,255,0.02);
+      user-select: none; }
+
+    .btn { border: 1px solid var(--border); background: transparent; color: var(--fg);
+      padding: 6px 10px; border-radius: 8px; cursor: pointer; font: inherit; opacity: .9; }
+    .btn:hover { opacity: 1; border-color: #2b3a4d; }
+
+    .flash { position: absolute; right: 12px; top: 10px; font-size: 12px; color: var(--ok);
+      opacity: 0; transition: opacity .3s ease; }
+    .flash.show { opacity: 1; }
+
+    /* Editor: single contenteditable surface */
+    #editor {
+      padding: 18px 20px 48px; outline: none; white-space: pre-wrap; word-break: break-word; caret-color: var(--fg);
+      overflow: auto; }
+
+    /* Placeholder (only when empty) */
+    #editor:empty:before {
+      content: "Type your todo list…  Press Ctrl+Shift+C to insert a checkbox.  Use Ctrl+S to save.";
+      color: var(--muted);
+    }
+
+    /* Checkbox line */
+    .item { display: flex; align-items: flex-start; gap: .6rem; padding: 2px 0; }
+    .item input[type="checkbox"] { appearance: none; width: 1rem; height: 1rem; border: 1px solid var(--accent);
+      border-radius: 4px; display: inline-block; position: relative; margin-top: .2rem; cursor: pointer; }
+    .item input[type="checkbox"]:checked { background: var(--accent); }
+    .item input[type="checkbox"]:checked::after { content: ""; position: absolute; left: 3px; top: 1px; width: 6px; height: 10px; border: 2px solid var(--bg);
+      border-top: 0; border-left: 0; transform: rotate(45deg); }
+
+    .item .text { flex: 1; outline: none; }
+    .item.done .text { text-decoration: line-through; color: var(--fg-dim); }
+
+    /* Plain text paragraph line (no checkbox) */
+    .line { padding: 2px 0; }
+
+    /* Make links subtle */
+    a { color: var(--fg); opacity: .85; text-decoration: none; border-bottom: 1px dotted var(--accent); }
+    a:hover { opacity: 1; }
+
+    /* Small footer msg (not visible unless screen is tall) */
+    .footer { position: fixed; left: 12px; bottom: 10px; color: var(--muted); font-size: 12px; user-select: none; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="topbar">
+      <button class="btn" id="newBtn" title="Clear note (Ctrl+N)">New</button>
+      <button class="btn" id="saveBtn" title="Save (Ctrl+S)">Save</button>
+      <span class="flash" id="flash">Saved ✓</span>
+    </div>
+
+    <!-- One single pane, contenteditable, like hastebin's simplicity -->
+    <div id="editor" contenteditable="true" spellcheck="false"></div>
+  </div>
+
+  <div class="footer">Local only • autosaves • no tracking</div>
+
+  <script>
+    // Ultra-minimal single-file app with localStorage persistence.
+    const STORAGE_KEY = 'hstsh_todo_v1';
+    const editor = document.getElementById('editor');
+    const saveBtn = document.getElementById('saveBtn');
+    const newBtn  = document.getElementById('newBtn');
+    const flash   = document.getElementById('flash');
+
+    // --- Serialization ---
+    // We store the editor's innerHTML so checkbox states persist exactly.
+    function save() {
+      localStorage.setItem(STORAGE_KEY, editor.innerHTML);
+      flash.classList.add('show');
+      setTimeout(() => flash.classList.remove('show'), 800);
+    }
+
+    function load() {
+      const html = localStorage.getItem(STORAGE_KEY);
+      if (html) {
+        editor.innerHTML = html;
+        ensureEventBindings();
+      } else {
+        // Minimal starter content (optional). Keep it sparse like hastebin.
+        editor.innerHTML = '';
+      }
+    }
+
+    function clearAll() {
+      if (editor.textContent.trim() === '' || confirm('Clear this note?')) {
+        editor.innerHTML = '';
+        save();
+        placeCaretAtEnd(editor);
+      }
+    }
+
+    // --- Editor helpers ---
+    function placeCaretAtEnd(el) {
+      el.focus();
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      range.collapse(false);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+
+    function wrapSelectionInTodo() {
+      // Insert a new checkbox line at the caret.
+      const html = '<div class="item"><input type="checkbox"><div class="text" contenteditable="true">New task</div></div>';
+      document.execCommand('insertHTML', false, html); // simple + supported by GitHub Pages browsers
+      ensureEventBindings();
+    }
+
+    function ensureEventBindings() {
+      // Delegate click -> toggle done class on parent .item
+      editor.querySelectorAll('.item input[type="checkbox"]').forEach(cb => {
+        if (!cb._bound) {
+          cb.addEventListener('change', () => {
+            const item = cb.closest('.item');
+            item.classList.toggle('done', cb.checked);
+            save();
+          });
+          cb._bound = true;
+        }
+      });
+
+      // Keep saving as user edits the text spans
+      editor.querySelectorAll('.item .text').forEach(span => {
+        if (!span._bound) {
+          span.addEventListener('input', autosave);
+          span._bound = true;
+        }
+      });
+    }
+
+    // Convert simple markdown-style checkboxes as user types.
+    // Lines that begin with "- [ ] " or "- [x] " become real checkboxes.
+    function maybeConvertMarkdownLine() {
+      const sel = window.getSelection();
+      if (!sel.rangeCount) return;
+      const range = sel.getRangeAt(0);
+      const node = range.startContainer;
+      // Walk up to a block element
+      let block = node.nodeType === 3 ? node.parentElement : node;
+      while (block && block !== editor && !/^DIV|P|PRE$/.test(block.tagName)) block = block.parentElement;
+      if (!block || block === editor) return;
+
+      const text = block.textContent;
+      const m = text.match(/^\s*- \[( |x|X)\]\s*(.*)$/);
+      if (m) {
+        const checked = m[1].toLowerCase() === 'x';
+        const body = m[2];
+        const tmpl = document.createElement('div');
+        tmpl.innerHTML = `<div class="item ${checked ? 'done' : ''}"><input type="checkbox" ${checked ? 'checked' : ''}><div class="text" contenteditable="true"></div></div>`;
+        tmpl.querySelector('.text').textContent = body;
+        block.replaceWith(tmpl.firstElementChild);
+        ensureEventBindings();
+        save();
+      }
+    }
+
+    // --- Autosave (throttled) ---
+    let saveTimer = null;
+    function autosave() {
+      if (saveTimer) cancelAnimationFrame(saveTimer);
+      saveTimer = requestAnimationFrame(save);
+    }
+
+    // --- Keybindings ---
+    document.addEventListener('keydown', (e) => {
+      // Save (Ctrl/Cmd+S)
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        save();
+      }
+      // New (Ctrl/Cmd+N)
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'n') {
+        e.preventDefault();
+        clearAll();
+      }
+      // Insert checkbox (Ctrl+Shift+C)
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'c') {
+        e.preventDefault();
+        wrapSelectionInTodo();
+      }
+    });
+
+    // Watch user input to allow markdown‑style "- [ ] " conversion
+    editor.addEventListener('input', (e) => {
+      autosave();
+      // Try conversion only when a bracket or space is typed to keep it cheap
+      if (e.inputType === 'insertText' && /[\]\sxX-]/.test(e.data || '')) {
+        maybeConvertMarkdownLine();
+      }
+    });
+
+    saveBtn.addEventListener('click', save);
+    newBtn.addEventListener('click', clearAll);
+
+    // Initial load
+    load();
+    placeCaretAtEnd(editor);
+
+    // Also autosave on unload (for safety)
+    window.addEventListener('beforeunload', save);
+  </script>
+</body>
+</html>
+
+<!-- Made with ChatGPT 5 on 11/4/2025-->
