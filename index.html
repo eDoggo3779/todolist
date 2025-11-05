@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>todo</title>
+  <style>
+    :root { --w: 680px; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+                 color: #111; background: #fafafa; }
+    main { max-width: var(--w); margin: 8vh auto; padding: 24px; background: #fff; border: 1px solid #eee; border-radius: 16px; }
+    h1 { font-size: 20px; margin: 0 0 16px; letter-spacing: .5px; font-weight: 600; }
+    form { display: flex; gap: 8px; margin-bottom: 16px; }
+    input[type="text"] { flex: 1; padding: 12px 14px; border: 1px solid #ddd; border-radius: 10px; outline: none; }
+    input[type="text"]:focus { border-color: #bbb; }
+    button { padding: 10px 14px; border: 1px solid #ddd; background: #f6f6f6; border-radius: 10px; cursor: pointer; }
+    button:hover { background: #eee; }
+    ul { list-style: none; padding: 0; margin: 0; }
+    li { display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 8px;
+         padding: 10px 8px; border-bottom: 1px dashed #eee; }
+    li:last-child { border-bottom: 0; }
+    .text { line-height: 1.35; word-break: break-word; }
+    .text.done { color: #777; text-decoration: line-through; }
+    .handle { cursor: grab; user-select: none; font-size: 14px; opacity: .6; padding: 0 6px; }
+    .meta { display: flex; gap: 6px; }
+    .pill { font-size: 11px; padding: 4px 8px; border: 1px solid #eee; border-radius: 999px; }
+    .toolbar { display: flex; gap: 8px; justify-content: space-between; margin-top: 14px; font-size: 13px; }
+    .left, .right { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .muted { color: #666; }
+    .linkish { border: 0; background: transparent; text-decoration: underline; padding: 0; cursor: pointer; }
+    @media (max-width: 520px) { main { margin: 2vh 12px; } }
+  </style>
+</head>
+<body>
+<main>
+  <h1>todo</h1>
+
+  <form id="addForm" autocomplete="off">
+    <input id="newItem" type="text" placeholder="add a task… (enter)" />
+    <button type="submit" title="add">add</button>
+  </form>
+
+  <ul id="list" aria-live="polite"></ul>
+
+  <div class="toolbar">
+    <div class="left">
+      <span id="count" class="muted">0 items</span>
+      <button id="clearDone" class="linkish">clear completed</button>
+    </div>
+    <div class="right">
+      <button id="exportBtn" class="pill" title="copy as JSON">export</button>
+      <label class="pill" style="cursor:pointer">
+        import <input id="importFile" type="file" accept="application/json" hidden>
+      </label>
+      <button id="resetAll" class="pill" title="delete all">reset</button>
+    </div>
+  </div>
+</main>
+
+<script>
+(() => {
+  const KEY = "todo-minimal-v1";
+  const listEl = document.getElementById("list");
+  const addForm = document.getElementById("addForm");
+  const newItem = document.getElementById("newItem");
+  const countEl = document.getElementById("count");
+  const clearDoneBtn = document.getElementById("clearDone");
+  const exportBtn = document.getElementById("exportBtn");
+  const importFile = document.getElementById("importFile");
+  const resetAll = document.getElementById("resetAll");
+
+  /** state */
+  let items = load();
+
+  function load() {
+    try { return JSON.parse(localStorage.getItem(KEY)) || []; }
+    catch { return []; }
+  }
+  function save() {
+    localStorage.setItem(KEY, JSON.stringify(items));
+    updateCount();
+  }
+  function updateCount() {
+    const done = items.filter(i => i.done).length;
+    countEl.textContent = `${items.length} items${items.length ? ` • ${done} done` : ""}`;
+  }
+
+  function render() {
+    listEl.innerHTML = "";
+    items.forEach((item, idx) => {
+      const li = document.createElement("li");
+      li.draggable = true;
+      li.dataset.index = idx;
+
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = item.done;
+      cb.addEventListener("change", () => {
+        items[idx].done = cb.checked;
+        save(); render();
+      });
+
+      const text = document.createElement("div");
+      text.className = "text" + (item.done ? " done" : "");
+      text.textContent = item.text;
+      text.contentEditable = true;
+      text.spellcheck = false;
+      text.addEventListener("blur", () => {
+        items[idx].text = text.textContent.trim();
+        save(); render();
+      });
+      text.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") { e.preventDefault(); text.blur(); }
+      });
+
+      const meta = document.createElement("div");
+      meta.className = "meta";
+
+      const handle = document.createElement("div");
+      handle.className = "handle";
+      handle.textContent = "⋮⋮";
+      meta.appendChild(handle);
+
+      const del = document.createElement("button");
+      del.textContent = "delete";
+      del.className = "linkish";
+      del.addEventListener("click", () => {
+        items.splice(idx, 1); save(); render();
+      });
+      meta.appendChild(del);
+
+      li.append(cb, text, meta);
+      listEl.appendChild(li);
+    });
+    updateCount();
+  }
+
+  // Add items
+  addForm.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const val = newItem.value.trim();
+    if (!val) return;
+    items.push({ text: val, done: false });
+    newItem.value = "";
+    save(); render();
+  });
+
+  // Clear completed
+  clearDoneBtn.addEventListener("click", () => {
+    items = items.filter(i => !i.done);
+    save(); render();
+  });
+
+  // Export (copy JSON to clipboard)
+  exportBtn.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(items, null, 2));
+      exportBtn.textContent = "copied!";
+      setTimeout(() => exportBtn.textContent = "export", 1000);
+    } catch {
+      alert("Copy failed. Select & copy from prompt:\n\n" + JSON.stringify(items, null, 2));
+    }
+  });
+
+  // Import from JSON file
+  importFile.addEventListener("change", async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text);
+      if (!Array.isArray(data)) throw new Error("Invalid file");
+      items = data.map(x => ({ text: String(x.text ?? ""), done: !!x.done }))
+                  .filter(x => x.text.length);
+      save(); render();
+    } catch (err) {
+      alert("Import failed: " + err.message);
+    } finally {
+      e.target.value = "";
+    }
+  });
+
+  // Reset all
+  resetAll.addEventListener("click", () => {
+    if (confirm("Delete all tasks?")) {
+      items = []; save(); render();
+    }
+  });
+
+  // Drag reordering (vanilla)
+  let dragIdx = null;
+  listEl.addEventListener("dragstart", (e) => {
+    const li = e.target.closest("li"); if (!li) return;
+    dragIdx = +li.dataset.index;
+    e.dataTransfer.effectAllowed = "move";
+  });
+  listEl.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    const li = e.target.closest("li"); if (!li) return;
+    const overIdx = +li.dataset.index;
+    if (overIdx === dragIdx) return;
+    const [moved] = items.splice(dragIdx, 1);
+    items.splice(overIdx, 0, moved);
+    dragIdx = overIdx; render(); save();
+  });
+  listEl.addEventListener("dragend", () => dragIdx = null);
+
+  // Keyboard niceties
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "n" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); newItem.focus(); }
+  });
+
+  render();
+})();
+</script>
+</body>
+</html>
